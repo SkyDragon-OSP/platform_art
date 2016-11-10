@@ -205,10 +205,15 @@ class Arm32Assembler FINAL : public ArmAssembler {
   void vcmpdz(DRegister dd, Condition cond = AL) OVERRIDE;
   void vmstat(Condition cond = AL) OVERRIDE;  // VMRS APSR_nzcv, FPSCR
 
+  void vcntd(DRegister dd, DRegister dm) OVERRIDE;
+  void vpaddld(DRegister dd, DRegister dm, int32_t size, bool is_unsigned) OVERRIDE;
+
   void vpushs(SRegister reg, int nregs, Condition cond = AL) OVERRIDE;
   void vpushd(DRegister reg, int nregs, Condition cond = AL) OVERRIDE;
   void vpops(SRegister reg, int nregs, Condition cond = AL) OVERRIDE;
   void vpopd(DRegister reg, int nregs, Condition cond = AL) OVERRIDE;
+  void vldmiad(Register base_reg, DRegister reg, int nregs, Condition cond = AL) OVERRIDE;
+  void vstmiad(Register base_reg, DRegister reg, int nregs, Condition cond = AL) OVERRIDE;
 
   // Branch instructions.
   void b(Label* label, Condition cond = AL) OVERRIDE;
