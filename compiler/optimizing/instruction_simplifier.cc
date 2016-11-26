@@ -234,40 +234,21 @@ bool InstructionSimplifierVisitor::TryDeMorganNegationFactoring(HBinaryOperation
 
 void InstructionSimplifierVisitor::VisitShift(HBinaryOperation* instruction) {
   DCHECK(instruction->IsShl() || instruction->IsShr() || instruction->IsUShr());
-  HInstruction* shift_amount = instruction->GetRight();
-  HInstruction* value = instruction->GetLeft();
+  HConstant* input_cst = instruction->GetConstantRight();
+  HInstruction* input_other = instruction->GetLeastConstantLeft();
 
-  int64_t implicit_mask = (value->GetType() == Primitive::kPrimLong)
-      ? kMaxLongShiftDistance
-      : kMaxIntShiftDistance;
-
-  if (shift_amount->IsConstant()) {
-    int64_t cst = Int64FromConstant(shift_amount->AsConstant());
-    if ((cst & implicit_mask) == 0) {
+  if (input_cst != nullptr) {
+    int64_t cst = Int64FromConstant(input_cst);
+    int64_t mask = (input_other->GetType() == Primitive::kPrimLong)
+        ? kMaxLongShiftDistance
+        : kMaxIntShiftDistance;
+    if ((cst & mask) == 0) {
       // Replace code looking like
-      //    SHL dst, value, 0
+      //    SHL dst, src, 0
       // with
-      //    value
-      instruction->ReplaceWith(value);
+      //    src
+      instruction->ReplaceWith(input_other);
       instruction->GetBlock()->RemoveInstruction(instruction);
-      RecordSimplification();
-      return;
-    }
-  }
-
-  // Shift operations implicitly mask the shift amount according to the type width. Get rid of
-  // unnecessary explicit masking operations on the shift amount.
-  // Replace code looking like
-  //    AND masked_shift, shift, <superset of implicit mask>
-  //    SHL dst, value, masked_shift
-  // with
-  //    SHL dst, value, shift
-  if (shift_amount->IsAnd()) {
-    HAnd* and_insn = shift_amount->AsAnd();
-    HConstant* mask = and_insn->GetConstantRight();
-    if ((mask != nullptr) && ((Int64FromConstant(mask) & implicit_mask) == implicit_mask)) {
-      instruction->ReplaceInput(and_insn->GetLeastConstantLeft(), 1);
-      RecordSimplification();
     }
   }
 }
@@ -296,7 +277,6 @@ bool InstructionSimplifierVisitor::ReplaceRotateWithRor(HBinaryOperation* op,
   if (!shl->GetRight()->HasUses()) {
     shl->GetRight()->GetBlock()->RemoveInstruction(shl->GetRight());
   }
-  RecordSimplification();
   return true;
 }
 
@@ -926,7 +906,6 @@ void InstructionSimplifierVisitor::VisitAdd(HAdd* instruction) {
     if (Primitive::IsIntegralType(instruction->GetType())) {
       instruction->ReplaceWith(input_other);
       instruction->GetBlock()->RemoveInstruction(instruction);
-      RecordSimplification();
       return;
     }
   }
@@ -1019,7 +998,6 @@ void InstructionSimplifierVisitor::VisitAnd(HAnd* instruction) {
     //    src
     instruction->ReplaceWith(instruction->GetLeft());
     instruction->GetBlock()->RemoveInstruction(instruction);
-    RecordSimplification();
     return;
   }
 
@@ -1137,7 +1115,6 @@ void InstructionSimplifierVisitor::VisitDiv(HDiv* instruction) {
     //    src
     instruction->ReplaceWith(input_other);
     instruction->GetBlock()->RemoveInstruction(instruction);
-    RecordSimplification();
     return;
   }
 
@@ -1198,7 +1175,6 @@ void InstructionSimplifierVisitor::VisitMul(HMul* instruction) {
     //    src
     instruction->ReplaceWith(input_other);
     instruction->GetBlock()->RemoveInstruction(instruction);
-    RecordSimplification();
     return;
   }
 
@@ -1239,7 +1215,6 @@ void InstructionSimplifierVisitor::VisitMul(HMul* instruction) {
       //    0
       instruction->ReplaceWith(input_cst);
       instruction->GetBlock()->RemoveInstruction(instruction);
-      RecordSimplification();
     } else if (IsPowerOfTwo(factor)) {
       // Replace code looking like
       //    MUL dst, src, pow_of_2
@@ -1358,7 +1333,6 @@ void InstructionSimplifierVisitor::VisitOr(HOr* instruction) {
     //    src
     instruction->ReplaceWith(input_other);
     instruction->GetBlock()->RemoveInstruction(instruction);
-    RecordSimplification();
     return;
   }
 
@@ -1372,7 +1346,6 @@ void InstructionSimplifierVisitor::VisitOr(HOr* instruction) {
     //    src
     instruction->ReplaceWith(instruction->GetLeft());
     instruction->GetBlock()->RemoveInstruction(instruction);
-    RecordSimplification();
     return;
   }
 
@@ -1408,7 +1381,6 @@ void InstructionSimplifierVisitor::VisitSub(HSub* instruction) {
     // yields `-0.0`.
     instruction->ReplaceWith(input_other);
     instruction->GetBlock()->RemoveInstruction(instruction);
-    RecordSimplification();
     return;
   }
 
@@ -1487,7 +1459,6 @@ void InstructionSimplifierVisitor::VisitXor(HXor* instruction) {
     //    src
     instruction->ReplaceWith(input_other);
     instruction->GetBlock()->RemoveInstruction(instruction);
-    RecordSimplification();
     return;
   }
 

@@ -94,20 +94,31 @@ class DexRegisterLocation {
     // Entries with no location are not stored and do not need own marker.
     kNone = static_cast<uint8_t>(-1),
 
-    kLastLocationKind = kConstantLargeValue,
-
-    // Ordering of the enum matters, all locations less or equal to
-    // kLastShortLocationKind have IsShortLocationKind return true.
-    kLastShortLocationKind = kConstant,
+    kLastLocationKind = kConstantLargeValue
   };
 
   static_assert(
       sizeof(Kind) == 1u,
       "art::DexRegisterLocation::Kind has a size different from one byte.");
 
-  ALWAYS_INLINE static bool IsShortLocationKind(Kind kind) {
-    DCHECK(kind != Kind::kNone);
-    return kind <= Kind::kLastShortLocationKind;
+  static bool IsShortLocationKind(Kind kind) {
+    switch (kind) {
+      case Kind::kInStack:
+      case Kind::kInRegister:
+      case Kind::kInRegisterHigh:
+      case Kind::kInFpuRegister:
+      case Kind::kInFpuRegisterHigh:
+      case Kind::kConstant:
+        return true;
+
+      case Kind::kInStackLargeOffset:
+      case Kind::kConstantLargeValue:
+        return false;
+
+      case Kind::kNone:
+        LOG(FATAL) << "Unexpected location kind";
+    }
+    UNREACHABLE();
   }
 
   // Convert `kind` to a "surface" kind, i.e. one that doesn't include

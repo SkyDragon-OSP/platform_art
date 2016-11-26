@@ -2326,7 +2326,7 @@ void Thumb2Assembler::EmitLoadStore(Condition cond,
   }
 
   Register rn = ad.GetRegister();
-  if (IsHighRegister(rn) && (byte || half || (rn != SP && rn != PC))) {
+  if (IsHighRegister(rn) && rn != SP && rn != PC) {
     must_be_32bit = true;
   }
 
@@ -2338,24 +2338,24 @@ void Thumb2Assembler::EmitLoadStore(Condition cond,
     // Immediate offset
     int32_t offset = ad.GetOffset();
 
+    // The 16 bit SP relative instruction can only have a 10 bit offset.
+    if (rn == SP && offset >= (1 << 10)) {
+      must_be_32bit = true;
+    }
+
     if (byte) {
       // 5 bit offset, no shift.
-      if ((offset & ~0x1f) != 0) {
+      if (offset >= (1 << 5)) {
         must_be_32bit = true;
       }
     } else if (half) {
-      // 5 bit offset, shifted by 1.
-      if ((offset & ~(0x1f << 1)) != 0) {
-        must_be_32bit = true;
-      }
-    } else if (rn == SP || rn == PC) {
-      // The 16 bit SP/PC relative instruction can only have an (imm8 << 2) offset.
-      if ((offset & ~(0xff << 2)) != 0) {
+      // 6 bit offset, shifted by 1.
+      if (offset >= (1 << 6)) {
         must_be_32bit = true;
       }
     } else {
-      // 5 bit offset, shifted by 2.
-      if ((offset & ~(0x1f << 2)) != 0) {
+      // 7 bit offset, shifted by 2.
+      if (offset >= (1 << 7)) {
         must_be_32bit = true;
       }
     }
@@ -2371,7 +2371,7 @@ void Thumb2Assembler::EmitLoadStore(Condition cond,
     } else {
       // 16 bit thumb1.
       uint8_t opA = 0;
-      bool sp_or_pc_relative = false;
+      bool sp_relative = false;
 
       if (byte) {
         opA = 7U /* 0b0111 */;
@@ -2380,10 +2380,7 @@ void Thumb2Assembler::EmitLoadStore(Condition cond,
       } else {
         if (rn == SP) {
           opA = 9U /* 0b1001 */;
-          sp_or_pc_relative = true;
-        } else if (rn == PC) {
-          opA = 4U;
-          sp_or_pc_relative = true;
+          sp_relative = true;
         } else {
           opA = 6U /* 0b0110 */;
         }
@@ -2392,7 +2389,7 @@ void Thumb2Assembler::EmitLoadStore(Condition cond,
           (load ? B11 : 0);
 
       CHECK_GE(offset, 0);
-      if (sp_or_pc_relative) {
+      if (sp_relative) {
         // SP relative, 10 bit offset.
         CHECK_LT(offset, (1 << 10));
         CHECK_ALIGNED(offset, 4);
@@ -2459,9 +2456,6 @@ void Thumb2Assembler::EmitLoadStore(Condition cond,
           encoding |= B21;
         } else if (!byte) {
           encoding |= B22;
-        }
-        if (load && is_signed && (byte || half)) {
-          encoding |= B24;
         }
         Emit32(encoding);
       } else {
@@ -3021,48 +3015,8 @@ void Thumb2Assembler::vpopd(DRegister reg, int nregs, Condition cond) {
 }
 
 
-void Thumb2Assembler::vldmiad(Register base_reg, DRegister reg, int nregs, Condition cond) {
-  int32_t rest = B23;
-  EmitVLdmOrStm(rest,
-                static_cast<uint32_t>(reg),
-                nregs,
-                base_reg,
-                /*is_load*/ true,
-                /*dbl*/ true,
-                cond);
-}
-
-
-void Thumb2Assembler::vstmiad(Register base_reg, DRegister reg, int nregs, Condition cond) {
-  int32_t rest = B23;
-  EmitVLdmOrStm(rest,
-                static_cast<uint32_t>(reg),
-                nregs,
-                base_reg,
-                /*is_load*/ false,
-                /*dbl*/ true,
-                cond);
-}
-
-
 void Thumb2Assembler::EmitVPushPop(uint32_t reg, int nregs, bool push, bool dbl, Condition cond) {
-  int32_t rest = B21 | (push ? B24 : B23);
-  EmitVLdmOrStm(rest, reg, nregs, SP, /*is_load*/ !push, dbl, cond);
-}
-
-
-void Thumb2Assembler::EmitVLdmOrStm(int32_t rest,
-                                    uint32_t reg,
-                                    int nregs,
-                                    Register rn,
-                                    bool is_load,
-                                    bool dbl,
-                                    Condition cond) {
   CheckCondition(cond);
-
-  DCHECK_GT(nregs, 0);
-  DCHECK_LE(reg + nregs, 32u);
-  DCHECK(!dbl || (nregs <= 16));
 
   uint32_t D;
   uint32_t Vd;
@@ -3075,17 +3029,14 @@ void Thumb2Assembler::EmitVLdmOrStm(int32_t rest,
     D = reg & 1;
     Vd = (reg >> 1) & 15U /* 0b1111 */;
   }
-
-  int32_t encoding = rest |
-                     14U /* 0b1110 */ << 28 |
-                     B27 | B26 | B11 | B9 |
-                     (is_load ? B20 : 0) |
-                     static_cast<int16_t>(rn) << 16 |
-                     D << 22 |
-                     Vd << 12 |
-                     (dbl ? B8 : 0) |
-                     nregs << (dbl ? 1 : 0);
-
+  int32_t encoding = B27 | B26 | B21 | B19 | B18 | B16 |
+                    B11 | B9 |
+        (dbl ? B8 : 0) |
+        (push ? B24 : (B23 | B20)) |
+        14U /* 0b1110 */ << 28 |
+        nregs << (dbl ? 1 : 0) |
+        D << 22 |
+        Vd << 12;
   Emit32(encoding);
 }
 
@@ -3166,30 +3117,6 @@ void Thumb2Assembler::vmstat(Condition cond) {  // VMRS APSR_nzcv, FPSCR.
   Emit32(encoding);
 }
 
-void Thumb2Assembler::vcntd(DRegister dd, DRegister dm) {
-  uint32_t encoding = (B31 | B30 | B29 | B28 | B27 | B26 | B25 | B24 | B23 | B21 | B20) |
-    ((static_cast<int32_t>(dd) >> 4) * B22) |
-    ((static_cast<uint32_t>(dd) & 0xf) * B12) |
-    (B10 | B8) |
-    ((static_cast<int32_t>(dm) >> 4) * B5) |
-    (static_cast<uint32_t>(dm) & 0xf);
-
-  Emit32(encoding);
-}
-
-void Thumb2Assembler::vpaddld(DRegister dd, DRegister dm, int32_t size, bool is_unsigned) {
-  CHECK(size == 8 || size == 16 || size == 32) << size;
-  uint32_t encoding = (B31 | B30 | B29 | B28 | B27 | B26 | B25 | B24 | B23 | B21 | B20) |
-    ((static_cast<uint32_t>(size >> 4) & 0x3) * B18) |
-    ((static_cast<int32_t>(dd) >> 4) * B22) |
-    ((static_cast<uint32_t>(dd) & 0xf) * B12) |
-    (B9) |
-    (is_unsigned ? B7 : 0) |
-    ((static_cast<int32_t>(dm) >> 4) * B5) |
-    (static_cast<uint32_t>(dm) & 0xf);
-
-  Emit32(encoding);
-}
 
 void Thumb2Assembler::svc(uint32_t imm8) {
   CHECK(IsUint<8>(imm8)) << imm8;

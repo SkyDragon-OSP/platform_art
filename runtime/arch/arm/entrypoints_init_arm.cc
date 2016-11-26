@@ -97,8 +97,7 @@ void InitEntryPoints(JniEntryPoints* jpoints, QuickEntryPoints* qpoints) {
 
   // Intrinsics
   qpoints->pIndexOf = art_quick_indexof;
-  // The ARM StringCompareTo intrinsic does not call the runtime.
-  qpoints->pStringCompareTo = nullptr;
+  qpoints->pStringCompareTo = art_quick_string_compareto;
   qpoints->pMemcpy = memcpy;
 
   // Read barrier.

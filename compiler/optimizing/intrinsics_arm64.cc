@@ -47,7 +47,6 @@ using helpers::SRegisterFrom;
 using helpers::WRegisterFrom;
 using helpers::XRegisterFrom;
 using helpers::InputRegisterAt;
-using helpers::OutputRegister;
 
 namespace {
 
@@ -621,66 +620,54 @@ void IntrinsicCodeGeneratorARM64::VisitMathRint(HInvoke* invoke) {
   __ Frintn(DRegisterFrom(locations->Out()), DRegisterFrom(locations->InAt(0)));
 }
 
-static void CreateFPToIntPlusFPTempLocations(ArenaAllocator* arena, HInvoke* invoke) {
+static void CreateFPToIntPlusTempLocations(ArenaAllocator* arena, HInvoke* invoke) {
   LocationSummary* locations = new (arena) LocationSummary(invoke,
                                                            LocationSummary::kNoCall,
                                                            kIntrinsified);
   locations->SetInAt(0, Location::RequiresFpuRegister());
   locations->SetOut(Location::RequiresRegister());
-  locations->AddTemp(Location::RequiresFpuRegister());
 }
 
-static void GenMathRound(HInvoke* invoke, bool is_double, vixl::MacroAssembler* masm) {
-  // Java 8 API definition for Math.round():
-  // Return the closest long or int to the argument, with ties rounding to positive infinity.
-  //
-  // There is no single instruction in ARMv8 that can support the above definition.
-  // We choose to use FCVTAS here, because it has closest semantic.
-  // FCVTAS performs rounding to nearest integer, ties away from zero.
-  // For most inputs (positive values, zero or NaN), this instruction is enough.
-  // We only need a few handling code after FCVTAS if the input is negative half value.
-  //
-  // The reason why we didn't choose FCVTPS instruction here is that
-  // although it performs rounding toward positive infinity, it doesn't perform rounding to nearest.
-  // For example, FCVTPS(-1.9) = -1 and FCVTPS(1.1) = 2.
-  // If we were using this instruction, for most inputs, more handling code would be needed.
-  LocationSummary* l = invoke->GetLocations();
-  FPRegister in_reg = is_double ? DRegisterFrom(l->InAt(0)) : SRegisterFrom(l->InAt(0));
-  FPRegister tmp_fp = is_double ? DRegisterFrom(l->GetTemp(0)) : SRegisterFrom(l->GetTemp(0));
-  Register out_reg = is_double ? XRegisterFrom(l->Out()) : WRegisterFrom(l->Out());
-  vixl::Label done;
+static void GenMathRound(LocationSummary* locations,
+                         bool is_double,
+                         vixl::MacroAssembler* masm) {
+  FPRegister in_reg = is_double ?
+      DRegisterFrom(locations->InAt(0)) : SRegisterFrom(locations->InAt(0));
+  Register out_reg = is_double ?
+      XRegisterFrom(locations->Out()) : WRegisterFrom(locations->Out());
+  UseScratchRegisterScope temps(masm);
+  FPRegister temp1_reg = temps.AcquireSameSizeAs(in_reg);
 
-  // Round to nearest integer, ties away from zero.
-  __ Fcvtas(out_reg, in_reg);
-
-  // For positive values, zero or NaN inputs, rounding is done.
-  __ Tbz(out_reg, out_reg.size() - 1, &done);
-
-  // Handle input < 0 cases.
-  // If input is negative but not a tie, previous result (round to nearest) is valid.
-  // If input is a negative tie, out_reg += 1.
-  __ Frinta(tmp_fp, in_reg);
-  __ Fsub(tmp_fp, in_reg, tmp_fp);
-  __ Fcmp(tmp_fp, 0.5);
-  __ Cinc(out_reg, out_reg, eq);
-
-  __ Bind(&done);
+  // 0.5 can be encoded as an immediate, so use fmov.
+  if (is_double) {
+    __ Fmov(temp1_reg, static_cast<double>(0.5));
+  } else {
+    __ Fmov(temp1_reg, static_cast<float>(0.5));
+  }
+  __ Fadd(temp1_reg, in_reg, temp1_reg);
+  __ Fcvtms(out_reg, temp1_reg);
 }
 
 void IntrinsicLocationsBuilderARM64::VisitMathRoundDouble(HInvoke* invoke) {
-  CreateFPToIntPlusFPTempLocations(arena_, invoke);
+  // See intrinsics.h.
+  if (kRoundIsPlusPointFive) {
+    CreateFPToIntPlusTempLocations(arena_, invoke);
+  }
 }
 
 void IntrinsicCodeGeneratorARM64::VisitMathRoundDouble(HInvoke* invoke) {
-  GenMathRound(invoke, /* is_double */ true, GetVIXLAssembler());
+  GenMathRound(invoke->GetLocations(), /* is_double */ true, GetVIXLAssembler());
 }
 
 void IntrinsicLocationsBuilderARM64::VisitMathRoundFloat(HInvoke* invoke) {
-  CreateFPToIntPlusFPTempLocations(arena_, invoke);
+  // See intrinsics.h.
+  if (kRoundIsPlusPointFive) {
+    CreateFPToIntPlusTempLocations(arena_, invoke);
+  }
 }
 
 void IntrinsicCodeGeneratorARM64::VisitMathRoundFloat(HInvoke* invoke) {
-  GenMathRound(invoke, /* is_double */ false, GetVIXLAssembler());
+  GenMathRound(invoke->GetLocations(), /* is_double */ false, GetVIXLAssembler());
 }
 
 void IntrinsicLocationsBuilderARM64::VisitMemoryPeekByte(HInvoke* invoke) {
@@ -1186,118 +1173,31 @@ void IntrinsicCodeGeneratorARM64::VisitStringCharAt(HInvoke* invoke) {
 
 void IntrinsicLocationsBuilderARM64::VisitStringCompareTo(HInvoke* invoke) {
   LocationSummary* locations = new (arena_) LocationSummary(invoke,
-                                                            invoke->InputAt(1)->CanBeNull()
-                                                                ? LocationSummary::kCallOnSlowPath
-                                                                : LocationSummary::kNoCall,
+                                                            LocationSummary::kCall,
                                                             kIntrinsified);
-  locations->SetInAt(0, Location::RequiresRegister());
-  locations->SetInAt(1, Location::RequiresRegister());
-  locations->AddTemp(Location::RequiresRegister());
-  locations->AddTemp(Location::RequiresRegister());
-  locations->AddTemp(Location::RequiresRegister());
-  locations->SetOut(Location::RequiresRegister(), Location::kOutputOverlap);
+  InvokeRuntimeCallingConvention calling_convention;
+  locations->SetInAt(0, LocationFrom(calling_convention.GetRegisterAt(0)));
+  locations->SetInAt(1, LocationFrom(calling_convention.GetRegisterAt(1)));
+  locations->SetOut(calling_convention.GetReturnLocation(Primitive::kPrimInt));
 }
 
 void IntrinsicCodeGeneratorARM64::VisitStringCompareTo(HInvoke* invoke) {
   vixl::MacroAssembler* masm = GetVIXLAssembler();
   LocationSummary* locations = invoke->GetLocations();
 
-  Register str = XRegisterFrom(locations->InAt(0));
-  Register arg = XRegisterFrom(locations->InAt(1));
-  Register out = OutputRegister(invoke);
-
-  Register temp0 = WRegisterFrom(locations->GetTemp(0));
-  Register temp1 = WRegisterFrom(locations->GetTemp(1));
-  Register temp2 = WRegisterFrom(locations->GetTemp(2));
-
-  vixl::Label loop;
-  vixl::Label find_char_diff;
-  vixl::Label end;
-
-  // Get offsets of count and value fields within a string object.
-  const int32_t count_offset = mirror::String::CountOffset().Int32Value();
-  const int32_t value_offset = mirror::String::ValueOffset().Int32Value();
-
   // Note that the null check must have been done earlier.
   DCHECK(!invoke->CanDoImplicitNullCheckOn(invoke->InputAt(0)));
 
-  // Take slow path and throw if input can be and is null.
-  SlowPathCodeARM64* slow_path = nullptr;
-  const bool can_slow_path = invoke->InputAt(1)->CanBeNull();
-  if (can_slow_path) {
-    slow_path = new (GetAllocator()) IntrinsicSlowPathARM64(invoke);
-    codegen_->AddSlowPath(slow_path);
-    __ Cbz(arg, slow_path->GetEntryLabel());
-  }
+  Register argument = WRegisterFrom(locations->InAt(1));
+  __ Cmp(argument, 0);
+  SlowPathCodeARM64* slow_path = new (GetAllocator()) IntrinsicSlowPathARM64(invoke);
+  codegen_->AddSlowPath(slow_path);
+  __ B(eq, slow_path->GetEntryLabel());
 
-  // Reference equality check, return 0 if same reference.
-  __ Subs(out, str, arg);
-  __ B(&end, eq);
-  // Load lengths of this and argument strings.
-  __ Ldr(temp0, MemOperand(str.X(), count_offset));
-  __ Ldr(temp1, MemOperand(arg.X(), count_offset));
-  // Return zero if both strings are empty.
-  __ Orr(out, temp0, temp1);
-  __ Cbz(out, &end);
-  // out = length diff.
-  __ Subs(out, temp0, temp1);
-  // temp2 = min(len(str), len(arg)).
-  __ Csel(temp2, temp1, temp0, ge);
-  // Shorter string is empty?
-  __ Cbz(temp2, &end);
-
-  // Store offset of string value in preparation for comparison loop.
-  __ Mov(temp1, value_offset);
-
-  UseScratchRegisterScope scratch_scope(masm);
-  Register temp4 = scratch_scope.AcquireX();
-
-  // Assertions that must hold in order to compare strings 4 characters at a time.
-  DCHECK_ALIGNED(value_offset, 8);
-  static_assert(IsAligned<8>(kObjectAlignment), "String of odd length is not zero padded");
-
-  const size_t char_size = Primitive::ComponentSize(Primitive::kPrimChar);
-  DCHECK_EQ(char_size, 2u);
-
-  // Promote temp0 to an X reg, ready for LDR.
-  temp0 = temp0.X();
-
-  // Loop to compare 4x16-bit characters at a time (ok because of string data alignment).
-  __ Bind(&loop);
-  __ Ldr(temp4, MemOperand(str.X(), temp1));
-  __ Ldr(temp0, MemOperand(arg.X(), temp1));
-  __ Cmp(temp4, temp0);
-  __ B(ne, &find_char_diff);
-  __ Add(temp1, temp1, char_size * 4);
-  __ Subs(temp2, temp2, 4);
-  __ B(gt, &loop);
-  __ B(&end);
-
-  // Promote temp1 to an X reg, ready for EOR.
-  temp1 = temp1.X();
-
-  // Find the single 16-bit character difference.
-  __ Bind(&find_char_diff);
-  // Get the bit position of the first character that differs.
-  __ Eor(temp1, temp0, temp4);
-  __ Rbit(temp1, temp1);
-  __ Clz(temp1, temp1);
-  // If the number of 16-bit chars remaining <= the index where the difference occurs (0-3), then
-  // the difference occurs outside the remaining string data, so just return length diff (out).
-  __ Cmp(temp2, Operand(temp1, LSR, 4));
-  __ B(le, &end);
-  // Extract the characters and calculate the difference.
-  __ Bic(temp1, temp1, 0xf);
-  __ Lsr(temp0, temp0, temp1);
-  __ Lsr(temp4, temp4, temp1);
-  __ And(temp4, temp4, 0xffff);
-  __ Sub(out, temp4, Operand(temp0, UXTH));
-
-  __ Bind(&end);
-
-  if (can_slow_path) {
-    __ Bind(slow_path->GetExitLabel());
-  }
+  __ Ldr(
+      lr, MemOperand(tr, QUICK_ENTRYPOINT_OFFSET(kArm64WordSize, pStringCompareTo).Int32Value()));
+  __ Blr(lr);
+  __ Bind(slow_path->GetExitLabel());
 }
 
 void IntrinsicLocationsBuilderARM64::VisitStringEquals(HInvoke* invoke) {
@@ -1359,36 +1259,20 @@ void IntrinsicCodeGeneratorARM64::VisitStringEquals(HInvoke* invoke) {
   __ Ldr(temp, MemOperand(str.X(), count_offset));
   __ Ldr(temp1, MemOperand(arg.X(), count_offset));
   // Check if lengths are equal, return false if they're not.
-  // Also compares the compression style, if differs return false.
   __ Cmp(temp, temp1);
   __ B(&return_false, ne);
-  // Return true if both strings are empty,
-  // Length needs to be masked out first because 0 is treated as compressed.
-  // Using AND bitwise operation with INT32_MAX won't work so instead using 1 shl and shr.
-  __ Lsl(temp, temp, 1);
-  __ Lsr(temp, temp, 1);
-  __ Cbz(temp, &return_true);
   // Store offset of string value in preparation for comparison loop
-  __ Mov(temp, Operand(temp1));
   __ Mov(temp1, value_offset);
+  // Return true if both strings are empty.
+  __ Cbz(temp, &return_true);
 
   // Assertions that must hold in order to compare strings 4 characters at a time.
   DCHECK_ALIGNED(value_offset, 8);
   static_assert(IsAligned<8>(kObjectAlignment), "String of odd length is not zero padded");
 
-  // If not compressed, directly to fast compare. Else do preprocess on length.
-  __ Cmp(temp, Operand(0));
-  __ B(&loop, gt);
-  // Mask out compression flag and adjust length for compressed string (8-bit)
-  // as if it is a 16-bit data, new_length = (length + 1) / 2
-  __ Lsl(temp, temp, 1);
-  __ Lsr(temp, temp, 1);
-  __ Add(temp, temp, Operand(1));
-  __ Mov(temp2, Operand(2));
-  __ Sdiv(temp, temp, temp2);
-
   temp1 = temp1.X();
   temp2 = temp2.X();
+
   // Loop to compare strings 4 characters at a time starting at the beginning of the string.
   // Ok to do this because strings are zero-padded to be 8-byte aligned.
   __ Bind(&loop);
@@ -1771,7 +1655,6 @@ void IntrinsicLocationsBuilderARM64::VisitStringGetCharsNoCheck(HInvoke* invoke)
 
   locations->AddTemp(Location::RequiresRegister());
   locations->AddTemp(Location::RequiresRegister());
-  locations->AddTemp(Location::RequiresRegister());
 }
 
 void IntrinsicCodeGeneratorARM64::VisitStringGetCharsNoCheck(HInvoke* invoke) {
@@ -1797,57 +1680,29 @@ void IntrinsicCodeGeneratorARM64::VisitStringGetCharsNoCheck(HInvoke* invoke) {
   Register dstBegin = XRegisterFrom(locations->InAt(4));
 
   Register src_ptr = XRegisterFrom(locations->GetTemp(0));
-  Register num_chr = XRegisterFrom(locations->GetTemp(1));
-  Register tmp1 = XRegisterFrom(locations->GetTemp(2));
+  Register src_ptr_end = XRegisterFrom(locations->GetTemp(1));
 
   UseScratchRegisterScope temps(masm);
   Register dst_ptr = temps.AcquireX();
-  Register tmp2 = temps.AcquireX();
+  Register tmp = temps.AcquireW();
 
-  // src address to copy from.
+  // src range to copy.
   __ Add(src_ptr, srcObj, Operand(value_offset));
+  __ Add(src_ptr_end, src_ptr, Operand(srcEnd, LSL, 1));
   __ Add(src_ptr, src_ptr, Operand(srcBegin, LSL, 1));
 
-  // dst address start to copy to.
+  // dst to be copied.
   __ Add(dst_ptr, dstObj, Operand(data_offset));
   __ Add(dst_ptr, dst_ptr, Operand(dstBegin, LSL, 1));
 
-  __ Sub(num_chr, srcEnd, srcBegin);
-
   // Do the copy.
-  vixl::Label loop;
-  vixl::Label done;
-  vixl::Label remainder;
-
-  // Early out for valid zero-length retrievals.
-  __ Cbz(num_chr, &done);
-
-  // Save repairing the value of num_chr on the < 8 character path.
-  __ Subs(tmp1, num_chr, 8);
-  __ B(lt, &remainder);
-
-  // Keep the result of the earlier subs, we are going to fetch at least 8 characters.
-  __ Mov(num_chr, tmp1);
-
-  // Main loop used for longer fetches loads and stores 8x16-bit characters at a time.
-  // (Unaligned addresses are acceptable here and not worth inlining extra code to rectify.)
+  vixl::Label loop, done;
   __ Bind(&loop);
-  __ Ldp(tmp1, tmp2, MemOperand(src_ptr, char_size * 8, vixl::PostIndex));
-  __ Subs(num_chr, num_chr, 8);
-  __ Stp(tmp1, tmp2, MemOperand(dst_ptr, char_size * 8, vixl::PostIndex));
-  __ B(ge, &loop);
-
-  __ Adds(num_chr, num_chr, 8);
-  __ B(eq, &done);
-
-  // Main loop for < 8 character case and remainder handling. Loads and stores one
-  // 16-bit Java character at a time.
-  __ Bind(&remainder);
-  __ Ldrh(tmp1, MemOperand(src_ptr, char_size, vixl::PostIndex));
-  __ Subs(num_chr, num_chr, 1);
-  __ Strh(tmp1, MemOperand(dst_ptr, char_size, vixl::PostIndex));
-  __ B(gt, &remainder);
-
+  __ Cmp(src_ptr, src_ptr_end);
+  __ B(&done, eq);
+  __ Ldrh(tmp, MemOperand(src_ptr, char_size, vixl::PostIndex));
+  __ Strh(tmp, MemOperand(dst_ptr, char_size, vixl::PostIndex));
+  __ B(&loop);
   __ Bind(&done);
 }
 
@@ -2352,46 +2207,9 @@ void IntrinsicCodeGeneratorARM64::VisitSystemArrayCopy(HInvoke* invoke) {
   __ Bind(slow_path->GetExitLabel());
 }
 
-static void GenIsInfinite(LocationSummary* locations,
-                          bool is64bit,
-                          vixl::MacroAssembler* masm) {
-  Operand infinity;
-  Register out;
-
-  if (is64bit) {
-    infinity = kPositiveInfinityDouble;
-    out = XRegisterFrom(locations->Out());
-  } else {
-    infinity = kPositiveInfinityFloat;
-    out = WRegisterFrom(locations->Out());
-  }
-
-  const Register zero = vixl::Assembler::AppropriateZeroRegFor(out);
-
-  MoveFPToInt(locations, is64bit, masm);
-  __ Eor(out, out, infinity);
-  // We don't care about the sign bit, so shift left.
-  __ Cmp(zero, Operand(out, LSL, 1));
-  __ Cset(out, eq);
-}
-
-void IntrinsicLocationsBuilderARM64::VisitFloatIsInfinite(HInvoke* invoke) {
-  CreateFPToIntLocations(arena_, invoke);
-}
-
-void IntrinsicCodeGeneratorARM64::VisitFloatIsInfinite(HInvoke* invoke) {
-  GenIsInfinite(invoke->GetLocations(), /* is64bit */ false, GetVIXLAssembler());
-}
-
-void IntrinsicLocationsBuilderARM64::VisitDoubleIsInfinite(HInvoke* invoke) {
-  CreateFPToIntLocations(arena_, invoke);
-}
-
-void IntrinsicCodeGeneratorARM64::VisitDoubleIsInfinite(HInvoke* invoke) {
-  GenIsInfinite(invoke->GetLocations(), /* is64bit */ true, GetVIXLAssembler());
-}
-
 UNIMPLEMENTED_INTRINSIC(ARM64, ReferenceGetReferent)
+UNIMPLEMENTED_INTRINSIC(ARM64, FloatIsInfinite)
+UNIMPLEMENTED_INTRINSIC(ARM64, DoubleIsInfinite)
 UNIMPLEMENTED_INTRINSIC(ARM64, IntegerHighestOneBit)
 UNIMPLEMENTED_INTRINSIC(ARM64, LongHighestOneBit)
 UNIMPLEMENTED_INTRINSIC(ARM64, IntegerLowestOneBit)
