@@ -225,7 +225,6 @@ void CommonCompilerTest::TearDown() {
   method_inliner_map_.reset();
   verification_results_.reset();
   compiler_options_.reset();
-  image_reservation_.reset();
 
   CommonRuntimeTest::TearDown();
 }

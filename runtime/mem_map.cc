@@ -157,8 +157,6 @@ bool MemMap::ContainedWithinExistingMap(uint8_t* ptr, size_t size, std::string* 
     }
     return false;
   }
-
-  ScopedBacktraceMapIteratorLock lock(map.get());
   for (BacktraceMap::const_iterator it = map->begin(); it != map->end(); ++it) {
     if ((begin >= it->start && begin < it->end)  // start of new within old
         && (end > it->start && end <= it->end)) {  // end of new within old
@@ -182,7 +180,6 @@ static bool CheckNonOverlapping(uintptr_t begin,
     *error_msg = StringPrintf("Failed to build process map");
     return false;
   }
-  ScopedBacktraceMapIteratorLock(map.get());
   for (BacktraceMap::const_iterator it = map->begin(); it != map->end(); ++it) {
     if ((begin >= it->start && begin < it->end)      // start of new within old
         || (end > it->start && end < it->end)        // end of new within old

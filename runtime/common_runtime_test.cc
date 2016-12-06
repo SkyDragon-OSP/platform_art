@@ -76,10 +76,9 @@ ScratchFile::ScratchFile() {
   file_.reset(new File(fd, GetFilename(), true));
 }
 
-ScratchFile::ScratchFile(const ScratchFile& other, const char* suffix)
-    : ScratchFile(other.GetFilename() + suffix) {}
-
-ScratchFile::ScratchFile(const std::string& filename) : filename_(filename) {
+ScratchFile::ScratchFile(const ScratchFile& other, const char* suffix) {
+  filename_ = other.GetFilename();
+  filename_ += suffix;
   int fd = open(filename_.c_str(), O_RDWR | O_CREAT, 0666);
   CHECK_NE(-1, fd);
   file_.reset(new File(fd, GetFilename(), true));
@@ -89,18 +88,6 @@ ScratchFile::ScratchFile(File* file) {
   CHECK(file != nullptr);
   filename_ = file->GetPath();
   file_.reset(file);
-}
-
-ScratchFile::ScratchFile(ScratchFile&& other) {
-  *this = std::move(other);
-}
-
-ScratchFile& ScratchFile::operator=(ScratchFile&& other) {
-  if (GetFile() != other.GetFile()) {
-    std::swap(filename_, other.filename_);
-    std::swap(file_, other.file_);
-  }
-  return *this;
 }
 
 ScratchFile::~ScratchFile() {

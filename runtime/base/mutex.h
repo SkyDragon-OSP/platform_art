@@ -88,6 +88,7 @@ enum LockLevel {
   kTracingUniqueMethodsLock,
   kTracingStreamingLock,
   kDeoptimizedMethodsLock,
+  kJitCodeCacheLock,
   kClassLoaderClassesLock,
   kDefaultMutexLevel,
   kMarkSweepLargeObjectLock,
@@ -98,7 +99,6 @@ enum LockLevel {
   kMonitorPoolLock,
   kMethodVerifiersLock,
   kClassLinkerClassesLock,  // TODO rename.
-  kJitCodeCacheLock,
   kBreakpointLock,
   kMonitorLock,
   kMonitorListLock,

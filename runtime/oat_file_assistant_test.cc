@@ -87,10 +87,8 @@ class OatFileAssistantTest : public Dex2oatEnvironmentTest {
                            bool with_patch_info = true) {
     // Temporarily redirect the dalvik cache so dex2oat doesn't find the
     // relocated image file.
-    std::string dalvik_cache = GetDalvikCache(GetInstructionSetString(kRuntimeISA));
-    std::string dalvik_cache_tmp = dalvik_cache + ".redirected";
-    ASSERT_EQ(0, rename(dalvik_cache.c_str(), dalvik_cache_tmp.c_str())) << strerror(errno);
-
+    std::string android_data_tmp = GetScratchDir() + "AndroidDataTmp";
+    setenv("ANDROID_DATA", android_data_tmp.c_str(), 1);
     std::vector<std::string> args;
     args.push_back("--dex-file=" + dex_location);
     args.push_back("--oat-file=" + odex_location);
@@ -108,7 +106,7 @@ class OatFileAssistantTest : public Dex2oatEnvironmentTest {
 
     std::string error_msg;
     ASSERT_TRUE(OatFileAssistant::Dex2Oat(args, &error_msg)) << error_msg;
-    ASSERT_EQ(0, rename(dalvik_cache_tmp.c_str(), dalvik_cache.c_str())) << strerror(errno);
+    setenv("ANDROID_DATA", android_data_.c_str(), 1);
 
     // Verify the odex file was generated as expected and really is
     // unrelocated.
