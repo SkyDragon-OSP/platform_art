@@ -30,9 +30,14 @@ include art/build/Android.common_utils.mk
 # Beware that tests may use the non-debug build for performance, notable 055-enum-performance
 #
 ART_BUILD_TARGET_NDEBUG ?= true
-ART_BUILD_TARGET_DEBUG ?= true
+ART_BUILD_TARGET_DEBUG ?= false
 ART_BUILD_HOST_NDEBUG ?= true
+ART_BUILD_HOST_DEBUG ?= false
+
+ifneq ($(USE_DEX2OAT_DEBUG),false)
+ART_BUILD_TARGET_DEBUG ?= true
 ART_BUILD_HOST_DEBUG ?= true
+endif
 
 # Set this to change what opt level Art is built at.
 ART_DEBUG_OPT_FLAG ?= -O2
@@ -239,8 +244,7 @@ ART_HOST_CODEGEN_ARCHS ?= all
 
 ifeq ($(ART_TARGET_CODEGEN_ARCHS),all)
   ART_TARGET_CODEGEN_ARCHS := $(sort $(ART_TARGET_SUPPORTED_ARCH) $(ART_HOST_SUPPORTED_ARCH))
-  # We need to handle the fact that some compiler tests mix code from different architectures.
-  ART_TARGET_COMPILER_TESTS ?= true
+  ART_TARGET_COMPILER_TESTS := false
 else
   ART_TARGET_COMPILER_TESTS := false
   ifeq ($(ART_TARGET_CODEGEN_ARCHS),svelte)
@@ -249,7 +253,7 @@ else
 endif
 ifeq ($(ART_HOST_CODEGEN_ARCHS),all)
   ART_HOST_CODEGEN_ARCHS := $(sort $(ART_TARGET_SUPPORTED_ARCH) $(ART_HOST_SUPPORTED_ARCH))
-  ART_HOST_COMPILER_TESTS ?= true
+  ART_HOST_COMPILER_TESTS := false
 else
   ART_HOST_COMPILER_TESTS := false
   ifeq ($(ART_HOST_CODEGEN_ARCHS),svelte)
@@ -369,8 +373,8 @@ ART_TARGET_ASFLAGS += $(art_asflags)
 
 ART_HOST_NON_DEBUG_CFLAGS := $(art_host_non_debug_cflags)
 ART_TARGET_NON_DEBUG_CFLAGS := $(art_target_non_debug_cflags)
-ART_HOST_DEBUG_CFLAGS := $(art_debug_cflags)
-ART_TARGET_DEBUG_CFLAGS := $(art_debug_cflags)
+ART_HOST_DEBUG_CFLAGS := $(art_host_non_debug_cflags)
+ART_TARGET_DEBUG_CFLAGS := $(art_target_non_debug_cflags)
 
 ifndef LIBART_IMG_HOST_MIN_BASE_ADDRESS_DELTA
   LIBART_IMG_HOST_MIN_BASE_ADDRESS_DELTA=-0x1000000
